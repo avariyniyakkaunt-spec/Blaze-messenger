@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>BLAZE Messenger</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui; background: #0a0a0a; color: #fff; height: 100vh; display: flex; flex-direction: column; }
+        .header { background: #111; padding: 15px; text-align: center; border-bottom: 2px solid #ff00ff; }
+        .header h1 { background: linear-gradient(45deg, #00ffff, #ff00ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+        .main { display: flex; flex: 1; overflow: hidden; }
+        .sidebar { width: 30%; background: #0d0d0d; border-right: 1px solid #ff00ff; overflow-y: auto; }
+        .chat-area { flex: 1; display: flex; flex-direction: column; }
+        .contact { padding: 12px; border-bottom: 1px solid #222; cursor: pointer; }
+        .contact:hover { background: #1a1a2a; }
+        .contact.active { background: #ff00ff20; border-left: 3px solid #ff00ff; }
+        .messages { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { max-width: 75%; padding: 8px 12px; border-radius: 18px; }
+        .msg-own { background: linear-gradient(135deg, #00ffff, #0088ff); align-self: flex-end; color: #000; }
+        .msg-other { background: #1e1e2a; align-self: flex-start; border-left: 3px solid #ff00ff; }
+        .msg-name { font-size: 10px; opacity: 0.7; margin-bottom: 3px; }
+        .msg-text { font-size: 14px; }
+        .msg-time { font-size: 9px; opacity: 0.5; margin-top: 3px; text-align: right; }
+        .input-area { display: flex; padding: 12px; background: #111; border-top: 1px solid #ff00ff; gap: 10px; }
+        .input-area input { flex: 1; padding: 10px; background: #1a1a2a; border: 1px solid #00ffff; border-radius: 25px; color: #fff; }
+        .input-area button { background: linear-gradient(45deg, #ff00ff, #00ffff); border: none; padding: 10px 20px; border-radius: 25px; font-weight: bold; }
+        .login-screen { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #0a0a0a; display: flex; justify-content: center; align-items: center; z-index: 100; }
+        .login-card { background: #111; padding: 30px; border-radius: 30px; text-align: center; border: 2px solid #ff00ff; width: 280px; }
+        .login-card input { width: 100%; padding: 10px; margin: 10px 0; background: #1a1a2a; border: 1px solid #00ffff; border-radius: 15px; color: #fff; }
+        .login-card button { width: 100%; padding: 10px; background: linear-gradient(45deg, #ff00ff, #00ffff); border: none; border-radius: 15px; font-weight: bold; }
+        .hidden { display: none; }
+        .server-url-input { width: 100%; padding: 10px; margin-bottom: 10px; background: #1a1a2a; border: 1px solid #00ffff; border-radius: 15px; color: #fff; text-align: center; }
+    </style>
+</head>
+<body>
+<div id="loginScreen" class="login-screen">
+    <div class="login-card">
+        <h1>🔥 BLAZE</h1>
+        <input type="text" id="serverUrl" class="server-url-input" placeholder="https://твой-сервер.onrender.com" value="http://192.168.1.185:5000">
+        <input type="text" id="username" placeholder="Твой ник">
+        <button onclick="join()">Войти</button>
+    </div>
+</div>
+<div id="chatScreen" class="hidden" style="display: flex; flex-direction: column; height: 100vh;">
+    <div class="header"><h1>🔥 BLAZE</h1></div>
+    <div class="main">
+        <div class="sidebar" id="sidebar"></div>
+        <div class="chat-area">
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="msgInput" placeholder="Сообщение..." onkeypress="if(event.keyCode==13) send()">
+                <button onclick="send()">→</button>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+    let socket = null, currentUser = '', currentContact = '', serverUrl = '';
+    
+    function join() {
+        serverUrl = document.getElementById('serverUrl').value.trim();
+        let name = document.getElementById('username').value.trim();
+        if(!name || !serverUrl) return;
+        currentUser = name;
+        document.getElementById('loginScreen').style.display = 'none';
+        document.getElementById('chatScreen').style.display = 'flex';
+        connectSocket();
+    }
+    
+    function connectSocket() {
+        socket = io(serverUrl);
+        socket.on('connect', () => {
+            socket.emit('join', {username: currentUser});
+            loadUsers();
+        });
+        socket.on('message', (data) => addMessage(data));
+        socket.on('new_message', (data) => {
+            if(data.from === currentContact || data.to === currentContact) addMessage(data);
+            loadUsers();
+        });
+        socket.on('user_status', () => loadUsers());
+    }
+    
+    function loadUsers() {
+        fetch(`${serverUrl}/api/users`)
+            .then(r => r.json())
+            .then(users => {
+                const sidebar = document.getElementById('sidebar');
+                sidebar.innerHTML = '';
+                users.forEach(user => {
+                    if(user.username !== currentUser) {
+                        const div = document.createElement('div');
+                        div.className = 'contact' + (currentContact === user.username ? ' active' : '');
+                        div.innerHTML = `<span class="${user.online ? 'online' : 'offline'}"></span> ${user.username}`;
+                        div.onclick = () => openChat(user.username);
+                        sidebar.appendChild(div);
+                    }
+                });
+            });
+    }
+    
+    function openChat(username) {
+        currentContact = username;
+        loadMessages();
+        document.querySelectorAll('.contact').forEach(el => el.classList.remove('active'));
+        event.target.classList.add('active');
+    }
+    
+    function loadMessages() {
+        if(!currentContact) return;
+        fetch(`${serverUrl}/api/messages/${currentContact}`)
+            .then(r => r.json())
+            .then(messages => {
+                const container = document.getElementById('messages');
+                container.innerHTML = '';
+                messages.forEach(msg => addMessage(msg));
+            });
+    }
+    
+    function addMessage(msg) {
+        const isOwn = msg.from === currentUser;
+        const container = document.getElementById('messages');
+        const div = document.createElement('div');
+        div.className = `msg ${isOwn ? 'msg-own' : 'msg-other'}`;
+        div.innerHTML = `<div class="msg-name">${msg.from}</div><div class="msg-text">${msg.text}</div><div class="msg-time">${new Date(msg.time * 1000).toLocaleTimeString()}</div>`;
+        container.appendChild(div);
+        div.scrollIntoView();
+    }
+    
+    function send() {
+        const input = document.getElementById('msgInput');
+        const text = input.value.trim();
+        if(!text || !currentContact || !socket) return;
+        socket.emit('private_message', {from: currentUser, to: currentContact, text: text});
+        input.value = '';
+    }
+</script>
+</body>
+</html>
